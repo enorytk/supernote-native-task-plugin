@@ -1,66 +1,50 @@
-import React, {useCallback, useEffect, useRef, useState} from 'react';
-import {AppState, NativeModules, ScrollView, Text, Button, TextInput, View} from 'react-native';
-import {changedColumns, observeTask, TaskResult, TaskRow, Watch} from './src/taskState';
-const emptyWatch: Watch = {idColumn: '', idValue: '', statusColumn: '', completedValue: ''};
+import React, {useEffect, useState} from 'react';
+import {NativeModules, ScrollView, Text, Button, TextInput, View} from 'react-native';
+import {Watch, TaskRow} from './src/taskState';
+import {bindSelection, checkNow, initialize, removeBinding, state, subscribe, reportError} from './src/runtime';
 export default function App() {
- const [busy, setBusy] = useState(false);
- const [report, setReport] = useState('Ready. Inspect schema first.');
- const [watch, setWatch] = useState<Watch>(emptyWatch);
- const [monitoring, setMonitoring] = useState(false);
- const [status, setStatus] = useState('No task selected');
- const [baseline, setBaseline] = useState<TaskRow | null>(null);
- const [diff, setDiff] = useState<string[]>([]);
- const inFlight = useRef(false);
- const active = useRef(AppState.currentState === 'active');
- const valid = /^[A-Za-z_][A-Za-z0-9_]*$/.test(watch.idColumn) && !!watch.idValue && !!watch.statusColumn && !!watch.completedValue;
- const run = useCallback(async (operation: () => Promise<unknown>) => {
-  if (inFlight.current) return;
-  inFlight.current = true; setBusy(true);
-  try {
-   if (!NativeModules.TaskProviderProbe) throw new Error('Native module missing from plugin package');
-   await operation();
-  } catch (error) {setStatus('Unknown: ' + String(error)); setReport(String(error));}
-  finally {inFlight.current = false; setBusy(false);}
- }, []);
- const refresh = useCallback((capture = false) => run(async () => {
-  const result: TaskResult = await NativeModules.TaskProviderProbe.readTask(watch.idColumn, watch.idValue);
-  const observation = observeTask(result, watch);
-  setStatus(observation.message + (observation.value === null ? '' : ` (value: ${observation.value})`));
-  setReport(JSON.stringify(result, null, 2));
-  if (result.queryOutcome === 'found' && result.row) {
-   if (capture) {setBaseline(result.row); setDiff([]);}
-   else if (baseline) setDiff(changedColumns(baseline, result.row));
-  } else setDiff([]);
- }), [run, watch, baseline]);
+ const [busy,setBusy] = useState(false);
+ const [view,setView] = useState(state());
+ const [watch,setWatch] = useState<Watch>({idColumn:'',idValue:'',statusColumn:'',completedValue:''});
+ const [rows,setRows] = useState<TaskRow[]>([]);
+ const [columns,setColumns] = useState<string[]>([]);
+ const [report,setReport] = useState('');
  useEffect(() => {
-  const sub = AppState.addEventListener('change', next => {
-   active.current = next === 'active';
-   if (active.current && monitoring && valid) void refresh();
-  });
-  const timer = setInterval(() => {if (active.current && monitoring && valid) void refresh();}, 15000);
-  return () => {sub.remove(); clearInterval(timer);};
- }, [monitoring, valid, refresh]);
- function edit(key: keyof Watch, value: string) {
-  setMonitoring(false); setBaseline(null); setDiff([]); setStatus('Configuration changed; capture a new baseline');
-  setWatch(previous => ({...previous, [key]: value}));
+  const stop = subscribe(() => setView(state()));
+  initialize().then(() => {setView(state()); const saved = state().bindings[0]; if (saved) setWatch({...saved,idValue:''});}).catch(reportError);
+  return stop;
+ },[]);
+ async function run(action: () => Promise<void>) {
+  if (busy) return;setBusy(true);
+  try {await action();} catch(error) {reportError(error);} finally {setBusy(false);}
  }
- return <ScrollView contentContainerStyle={{padding: 24, gap: 16}}>
-  <Text style={{fontSize: 28}}>Native task watcher</Text>
-  <Text>Read native task state and compare it before and after completion. No tasks or handwriting are changed.</Text>
-  <Button title="Inspect provider and schema" disabled={busy} onPress={() => run(async () => setReport(JSON.stringify(await NativeModules.TaskProviderProbe.inspect(false), null, 2)))} />
-  <Button title="Read 5 task samples" disabled={busy} onPress={() => run(async () => setReport(JSON.stringify(await NativeModules.TaskProviderProbe.inspect(true), null, 2)))} />
-  <Text>Samples contain private task data. Use the returned schema to configure a specific task. Completion values vary by firmware.</Text>
-  {(['idColumn', 'idValue', 'statusColumn', 'completedValue'] as const).map(key =>
-   <View key={key}><Text>{({idColumn: 'Task ID column', idValue: 'Task ID value', statusColumn: 'Completion column', completedValue: 'Completed value'})[key]}</Text>
-    <TextInput editable={!busy} value={watch[key]} onChangeText={value => edit(key, value)} autoCapitalize="none" autoCorrect={false} style={{borderWidth: 1, padding: 10, fontSize: 18}} />
-   </View>)}
-  <Button title="Capture baseline" disabled={busy || !valid} onPress={() => refresh(true)} />
-  <Button title="Check selected task now" disabled={busy || !valid} onPress={() => refresh()} />
-  <Button title={monitoring ? 'Stop watching' : 'Watch every 15 seconds while active'} disabled={busy || !valid} onPress={() => {setMonitoring(!monitoring); if (!monitoring) void refresh();}} />
-  <Text style={{fontSize: 22}}>{status}</Text>
-  <Text>{baseline ? `Columns changed since baseline: ${diff.join(', ') || 'none'}` : 'Capture a baseline to compare columns.'}</Text>
-  <Text>Watch settings last for this screen session. Return from native To-Do and check the task again. Automatic note linking and ink strike-through require a device test.</Text>
-  {busy && <Text>Reading… Cancellation is requested after 10 seconds. Close the plugin if the provider hangs.</Text>}
-  <Text selectable style={{fontSize: 16}}>{report}</Text>
+ return <ScrollView contentContainerStyle={{padding:24,gap:14}}>
+  <Text style={{fontSize:28}}>Native Task Sync</Text>
+  <Text>{view.message}</Text>
+  <Text>Check a linked task in the native To-Do app, then open its source note page. The plugin adds one strike-through across the linked handwriting. Original ink is preserved.</Text>
+  <Button title="Check this note now" disabled={busy} onPress={() => run(checkNow)} />
+  {view.bindings.map(b => <View key={b.key} style={{borderWidth:1,padding:10}}>
+   <Text>Task {b.idValue}: {b.enabled ? 'automatic sync enabled' : 'paused'}</Text>
+   <Button title="Stop tracking this task" disabled={busy} onPress={() => run(() => removeBinding(b.key))} />
+  </View>)}
+  <Text style={{fontSize:22}}>Link handwriting to a native task</Text>
+  <Text>{view.pending ? 'Handwriting selected. Choose its existing native task below.' : 'First create the task using native lasso-to-task. Then lasso the same handwriting and tap Link native task.'}</Text>
+  <Button title="Load native tasks and columns" disabled={busy} onPress={() => run(async () => {
+   const result = await NativeModules.TaskProviderProbe.inspect(true);
+   setReport(JSON.stringify(result,null,2));setRows(result.samples || []);setColumns(result.columns || []);
+  })} />
+  <Text>Columns: {columns.join(', ') || 'load tasks first'}</Text>
+  <Text>For this firmware, enter the task ID column, completion column, and completed value once. Use before/after records to verify the completed value; it is not assumed.</Text>
+  {(['idColumn','idValue','statusColumn','completedValue'] as const).map(key => <View key={key}>
+   <Text>{({idColumn:'Task ID column',idValue:'Task ID',statusColumn:'Completion column',completedValue:'Completed value'})[key]}</Text>
+   <TextInput editable={!busy} value={watch[key]} autoCapitalize="none" autoCorrect={false} onChangeText={value => setWatch(prev => ({...prev,[key]:value}))} style={{borderWidth:1,padding:10,fontSize:18}} />
+  </View>)}
+  {!!watch.idColumn && rows.filter(row => row[watch.idColumn] != null).map((row,index) => <View key={index} style={{borderWidth:1,padding:8}}>
+   <Text>{Object.entries(row).filter(([key]) => /title|name|content|status|complete|done/i.test(key)).map(([key,value]) => `${key}: ${String(value).slice(0,150)}`).join('\n') || `Task ${row[watch.idColumn]}`}</Text>
+   <Button title={`Choose ${row[watch.idColumn]}`} disabled={busy} onPress={() => setWatch(prev => ({...prev,idValue:row[prev.idColumn] || ''}))} />
+  </View>)}
+  <Button title="Save link and enable automatic strike-through" disabled={busy || !view.pending || !watch.idValue || !watch.completedValue} onPress={() => run(() => bindSelection(watch))} />
+  <Text>Task preview is capped at 200 records. Settings are saved on-device. Unchecking a task does not erase existing strike-through; use note undo or the eraser. If the host stops the plugin, open Native Task Sync once to resume.</Text>
+  <Text selectable>{report}</Text>
  </ScrollView>;
 }

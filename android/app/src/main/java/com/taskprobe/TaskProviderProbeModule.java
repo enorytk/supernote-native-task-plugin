@@ -103,10 +103,10 @@ public final class TaskProviderProbeModule extends ReactContextBaseJavaModule {
                 }
                 rows.pushMap(row);
                 returned++;
-              } while (returned < 5 && cursor.moveToNext());
+              } while (returned < 200 && cursor.moveToNext());
               out.putArray("samples", rows);
               out.putInt("sampleRowsReturned", returned);
-              out.putBoolean("samplesCapped", returned == 5);
+              out.putBoolean("samplesCapped", returned == 200);
             }
           }
         }
@@ -173,6 +173,22 @@ public final class TaskProviderProbeModule extends ReactContextBaseJavaModule {
     }); } catch (RejectedExecutionException e) {
       running.set(false); promise.reject("CLOSED", "The probe has been closed", e);
     }
+  }
+  @ReactMethod public void loadBindings(Promise promise) {
+    promise.resolve(getReactApplicationContext().getSharedPreferences(
+        "supernote-native-task-plugin-v1", android.content.Context.MODE_PRIVATE)
+        .getString("bindings", "[]"));
+  }
+  @ReactMethod public void saveBindings(String json, Promise promise) {
+    try {
+      if (json.length() > 1048576) throw new IllegalArgumentException("Bindings exceed 1 MB");
+      new org.json.JSONArray(json);
+      boolean saved = getReactApplicationContext().getSharedPreferences(
+          "supernote-native-task-plugin-v1", android.content.Context.MODE_PRIVATE)
+          .edit().putString("bindings", json).commit();
+      if (!saved) throw new IllegalStateException("Could not save task links");
+      promise.resolve(true);
+    } catch (Exception e) { promise.reject("SAVE_FAILED", e); }
   }
   @Override public void invalidate() {
     worker.shutdownNow(); timer.shutdownNow(); super.invalidate();
