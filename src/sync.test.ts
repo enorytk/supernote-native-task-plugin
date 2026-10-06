@@ -39,3 +39,16 @@ test('preserves existing element metadata and rejects conflicting links', () => 
 test('invalid coordinates never yield a mark', () => {
  expect(() => lineFor([{...ink,maxX:0}],page.size)).toThrow();
 });
+test('overlapping completion checks cannot insert duplicate marks', async () => {
+ const {port,sync} = fixture();let release!: () => void;
+ (port.task as jest.Mock).mockImplementation(() => new Promise(resolve => {release = () => resolve({queryOutcome:'found',row:{id:'1',done:'1'}});}));
+ const first = sync.check([b]);
+ // Let the first check reach provider I/O, then simulate a lifecycle tick.
+ await Promise.resolve();await Promise.resolve();await sync.check([b]);
+ release();await first;
+ expect(port.task).toHaveBeenCalledTimes(1);expect(port.insert).toHaveBeenCalledTimes(1);
+});
+test('ink across layers is never changed', async () => {
+ const {port,sync} = fixture(); (port.elements as jest.Mock).mockResolvedValue([ink,{...ink,numInPage:2,layerNum:1}]);
+ await sync.check([b]);expect(port.insert).not.toHaveBeenCalled();
+});
