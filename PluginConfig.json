@@ -1,0 +1,10 @@
+{
+  "name": "TaskProviderProbe",
+  "desc": "Read-only native task provider diagnostic",
+  "iconPath": "assets/icon.png",
+  "versionName": "0.1.0",
+  "versionCode": 1,
+  "pluginID": "taskprobe8a46c129",
+  "pluginKey": "TaskProviderProbe",
+  "jsMainPath": "index"
+}

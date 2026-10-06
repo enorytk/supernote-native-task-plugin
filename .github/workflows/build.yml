@@ -1,0 +1,32 @@
+name: Build plugin
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.1.12297006'
+      - run: npm ci --no-audit --no-fund
+      - run: npx tsc --noEmit
+      - run: npm test -- --runInBand
+      - run: npm run plugin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TaskProviderProbe
+          path: build/outputs/TaskProviderProbe.snplg
+          if-no-files-found: error
